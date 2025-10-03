@@ -59,7 +59,6 @@ func BookControllerGetById(c *fiber.Ctx) error {
 	defer cancel()
 
 	var book model.Book
-	// find book by id and not soft deleted
 	err = bookCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&book)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Book not found"})
