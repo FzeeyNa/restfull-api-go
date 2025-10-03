@@ -7,16 +7,16 @@ import (
 
 func SetupRoutes(app *fiber.App) {
 	api := app.Group("/api")
-	v1 := api.Group("/v1")
+	//v1 := api.Group("/v1")
 
-	books := v1.Group("/books")
+	books := api.Group("/books")
 	books.Get("/", controller.BookControllerGetAll)
 	books.Get("/:id", controller.BookControllerGetById)
 	books.Post("/", controller.BookControllerPost)
 	books.Put("/:id", controller.BookControllerPut)
 	books.Delete("/:id", controller.BookControllerDelete)
 
-	authors := v1.Group("/authors")
+	authors := api.Group("/authors")
 	authors.Get("/", controller.AuthorControllerGetAll)
 	authors.Get("/:id", controller.AuthorControllerGetById)
 	authors.Post("/", controller.AuthorControllerPost)

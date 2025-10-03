@@ -4,20 +4,37 @@ import (
 	"context"
 	"restfull-api-go/database"
 	"restfull-api-go/model"
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var authorCollection = database.MongoDB.Collection("authors")
+// get next id for author
+func getNextAuthorID() (int, error) {
+	authorCollection := database.MongoDB.Collection("authors")
+	var lastAuthor model.Author
+	opts := options.FindOne().SetSort(bson.D{{"_id", -1}})
+	err := authorCollection.FindOne(context.Background(), bson.D{}, opts).Decode(&lastAuthor)
+	if err != nil {
+		// If no documents are found, start with ID 1
+		if err.Error() == "mongo: no documents in result" {
+			return 1, nil
+		}
+		return 0, err
+	}
+	return lastAuthor.ID + 1, nil
+}
 
 func AuthorControllerGetAll(c *fiber.Ctx) error {
+	authorCollection := database.MongoDB.Collection("authors")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cursor, err := authorCollection.Find(ctx, bson.M{})
+	// find all authors that are not soft deleted
+	cursor, err := authorCollection.Find(ctx, bson.M{"deleted_at": nil})
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -32,8 +49,9 @@ func AuthorControllerGetAll(c *fiber.Ctx) error {
 }
 
 func AuthorControllerGetById(c *fiber.Ctx) error {
+	authorCollection := database.MongoDB.Collection("authors")
 	idParam := c.Params("id")
-	id, err := primitive.ObjectIDFromHex(idParam)
+	id, err := strconv.Atoi(idParam)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
@@ -42,7 +60,8 @@ func AuthorControllerGetById(c *fiber.Ctx) error {
 	defer cancel()
 
 	var author model.Author
-	err = authorCollection.FindOne(ctx, bson.M{"_id": id}).Decode(&author)
+	// find author by id and not soft deleted
+	err = authorCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&author)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Author not found"})
 	}
@@ -51,17 +70,26 @@ func AuthorControllerGetById(c *fiber.Ctx) error {
 }
 
 func AuthorControllerPost(c *fiber.Ctx) error {
+	authorCollection := database.MongoDB.Collection("authors")
 	var author model.Author
 	if err := c.BodyParser(&author); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	author.ID = primitive.NewObjectID()
+	nextID, err := getNextAuthorID()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate author ID"})
+	}
+
+	author.ID = nextID
+	author.CreatedAt = time.Now()
+	author.UpdatedAt = time.Now()
+	author.DeletedAt = nil
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := authorCollection.InsertOne(ctx, author)
+	_, err = authorCollection.InsertOne(ctx, author)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -70,8 +98,9 @@ func AuthorControllerPost(c *fiber.Ctx) error {
 }
 
 func AuthorControllerPut(c *fiber.Ctx) error {
+	authorCollection := database.MongoDB.Collection("authors")
 	idParam := c.Params("id")
-	id, err := primitive.ObjectIDFromHex(idParam)
+	id, err := strconv.Atoi(idParam)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
@@ -81,12 +110,17 @@ func AuthorControllerPut(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	update := bson.M{"$set": author}
+	update := bson.M{
+		"$set": bson.M{
+			"name":       author.Name,
+			"updated_at": time.Now(),
+		},
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := authorCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	result, err := authorCollection.UpdateOne(ctx, bson.M{"_id": id, "deleted_at": nil}, update)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -94,12 +128,20 @@ func AuthorControllerPut(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Author not found"})
 	}
 
-	return c.JSON(author)
+	// To return the updated author, we need to fetch it again
+	var updatedAuthor model.Author
+	err = authorCollection.FindOne(ctx, bson.M{"_id": id}).Decode(&updatedAuthor)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Author not found after update"})
+	}
+
+	return c.JSON(updatedAuthor)
 }
 
 func AuthorControllerDelete(c *fiber.Ctx) error {
+	authorCollection := database.MongoDB.Collection("authors")
 	idParam := c.Params("id")
-	id, err := primitive.ObjectIDFromHex(idParam)
+	id, err := strconv.Atoi(idParam)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid ID"})
 	}
@@ -107,12 +149,14 @@ func AuthorControllerDelete(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := authorCollection.DeleteOne(ctx, bson.M{"_id": id})
+	// soft delete
+	update := bson.M{"$set": bson.M{"deleted_at": time.Now()}}
+	result, err := authorCollection.UpdateOne(ctx, bson.M{"_id": id, "deleted_at": nil}, update)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	if result.DeletedCount == 0 {
+	if result.MatchedCount == 0 {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Author not found"})
 	}
 

@@ -1,9 +1,12 @@
 package model
 
-import "go.mongodb.org/mongo-driver/bson/primitive"
+import "time"
 
 type Book struct {
-	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
-	Title    string             `bson:"title" json:"title"`
-	AuthorID primitive.ObjectID `bson:"author_id,omitempty" json:"author_id,omitempty"`
+	ID        int        `bson:"_id" json:"id"`
+	Title     string     `bson:"title" json:"title"`
+	AuthorID  int        `bson:"author_id" json:"author_id"`
+	CreatedAt time.Time  `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time  `bson:"updated_at" json:"updated_at"`
+	DeletedAt *time.Time `bson:"deleted_at,omitempty" json:"deleted_at,omitempty"`
 }
